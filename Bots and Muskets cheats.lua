@@ -1,3 +1,7 @@
+-- ==============================================================================
+-- BOTS AND MUSKETS: ENHANCED CONTROL MENU SCRIPT (GRENADE HOMING & UI FIXES)
+-- ==============================================================================
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -24,19 +28,22 @@ local state = {
     noAimRequired = false,
     infiniteLemonade = false,
     noAttackCooldown = false,
-    fakeBlock = false,             -- Fake Block state
-    permanentSabreBuff = false,    -- Auto Charge Loop state
-    sabreSpamAttack = false,       -- Auto Sabre Attack state
-    removeSabreEffects = false,    -- Mute Sabre sounds & visual effects
-    noChargeLimit = false,         -- Remove Charge Cooldown state
+    fakeBlock = false,             
+    permanentSabreBuff = false,    
+    sabreSpamAttack = false,       
+    removeSabreEffects = false,    
+    noChargeLimit = false,         
+    grenadeHoming = false,         
 }
 
 local settings = {
     bringDistance = 4,
     farmPosition = Vector3.new(0, -400, 0),
     lemonadeSpeed = 25,
-    sabreBuffInterval = 0.05,      -- Interval for Auto Charge Loop
-    sabreSpamInterval = 0.01,      -- Interval for Sabre attack spam
+    sabreBuffInterval = 0.05,      
+    sabreSpamInterval = 0.01,      
+    grenadeSpeed = 150,            -- Speed at which grenades home in
+    grenadeStopDistance = 4,       -- Distance to stop tracking enemy
 }
 
 local binds = {
@@ -53,13 +60,13 @@ local binds = {
     sabreSpamAttack = Enum.KeyCode.Unknown,
     removeSabreEffects = Enum.KeyCode.Unknown,
     noChargeLimit = Enum.KeyCode.Unknown,
+    grenadeHoming = Enum.KeyCode.Unknown,
 }
 
 local connections = {}
 local bindingTarget = nil
 local farmBoxModel = nil
 local isMouseDown = false
-local lastMeleeSwitchAttempt = 0
 
 local farmStructureParts = {
     { name = "Part",       position = Vector3.new(-14, 22, -5),  size = Vector3.new(42, 42, 6),  canCollide = true  },
@@ -71,10 +78,8 @@ local farmStructureParts = {
     { name = "Part",       position = Vector3.new(-14, 22, 31), size = Vector3.new(42, 42, 6), canCollide = true  },
 }
 
--- Forward declaration for farm box creation function
 local createFarmBox
 
--- Function to handle auto-teleporting when joining the "Alive" team while farming
 local function checkAliveTeamFarmTeleport()
     if state.farm and localPlayer.Team and string.lower(localPlayer.Team.Name) == "alive" then
         task.wait(0.1)
@@ -87,7 +92,6 @@ local function checkAliveTeamFarmTeleport()
     end
 end
 
--- Reset remote cache automatically when character respawns & check Alive team teleport
 local cachedSabreRemote = nil
 localPlayer.CharacterAdded:Connect(function()
     cachedSabreRemote = nil
@@ -110,6 +114,66 @@ local function checkForCuirassiers()
         end
     end
     return false
+end
+
+local function getClosestEnemyInWorld()
+    local char = localPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local enemiesFolder = workspace:FindFirstChild("Enemies")
+    if not enemiesFolder then return nil end
+
+    local closest, minDist = nil, math.huge
+    for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+        local targetPart = enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChild("Head") or (enemy:IsA("BasePart") and enemy)
+        local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+        if targetPart and (not humanoid or humanoid.Health > 0) then
+            local dist = (targetPart.Position - hrp.Position).Magnitude
+            if dist < minDist then
+                minDist = dist
+                closest = targetPart
+            end
+        end
+    end
+    return closest
+end
+
+-- ==================== GRENADE HOMING LOGIC ====================
+local function handleGrenadeHoming()
+    if not state.grenadeHoming then return end
+    
+    local target = getClosestEnemyInWorld()
+    if not target then return end
+
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj.Name:lower():find("grenade") then
+            local partToMove = nil
+            if obj:IsA("BasePart") then
+                partToMove = obj
+            elseif obj:IsA("Model") then
+                partToMove = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            end
+
+            if partToMove and partToMove.Anchored == false then
+                local targetPos = target.Position
+                local currentPos = partToMove.Position
+                local distance = (targetPos - currentPos).Magnitude
+
+                if distance > settings.grenadeStopDistance then
+                    local direction = (targetPos - currentPos).Unit
+                    local step = direction * math.min(settings.grenadeSpeed * 0.016, distance)
+                    local newCF = CFrame.new(currentPos + step)
+                    
+                    if obj:IsA("Model") then
+                        obj:PivotTo(newCF)
+                    else
+                        obj.CFrame = newCF
+                    end
+                end
+            end
+        end
+    end
 end
 
 -- 1. FAKE BLOCK FUNCTION
@@ -158,13 +222,6 @@ local function getSabreRemote()
 
     for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
         if obj:IsA("RemoteEvent") and (obj.Name == "RemoteEvent" or obj.Name:lower():find("sabre") or obj.Name:lower():find("charge")) then
-            cachedSabreRemote = obj
-            return cachedSabreRemote
-        end
-    end
-
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("RemoteEvent") and obj.Name == "RemoteEvent" then
             cachedSabreRemote = obj
             return cachedSabreRemote
         end
@@ -238,25 +295,9 @@ local function applyRemoveSabreEffects()
             end
         end
     end
-
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        local animator = humanoid:FindFirstChildOfClass("Animator")
-        if animator then
-            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                if track.Animation then
-                    local animId = tostring(track.Animation.AnimationId)
-                    local trackName = track.Name:lower()
-                    if animId:find("93016499788529") or trackName:find("charge") then
-                        track:Stop()
-                    end
-                end
-            end
-        end
-    end
 end
 
--- 6. REMOVE CHARGE COOLDOWN (Hides UI Cooldown Timer & allows manual charge without 30s delay)
+-- 6. REMOVE CHARGE COOLDOWN
 local function applyNoChargeLimit()
     if not state.noChargeLimit then return end
     
@@ -273,7 +314,7 @@ local function applyNoChargeLimit()
     end
 end
 
--- SMART WEAPON ROUTINE (Heavy Sabre Priority vs. Carbine Melee Override)
+-- ==================== WEAPON PRIORITIZATION & ZERO-COOLDOWN ROUTINE ====================
 local function handleWeaponAndAttack()
     local char = localPlayer.Character
     if not char then return end
@@ -281,8 +322,8 @@ local function handleWeaponAndAttack()
     if not humanoid or humanoid.Health <= 0 then return end
     local backpack = localPlayer:FindFirstChild("Backpack")
 
+    -- 1. CARBINE / CUIRASSIER CHECK
     local cuirassierPresent = checkForCuirassiers()
-
     if cuirassierPresent then
         local carbine = char:FindFirstChild("Carbine") or (backpack and backpack:FindFirstChild("Carbine"))
         if carbine then
@@ -290,28 +331,8 @@ local function handleWeaponAndAttack()
                 humanoid:EquipTool(carbine)
             end
 
-            local animator = humanoid:FindFirstChildOfClass("Animator")
-            if animator then
-                local isMeleeActive = false
-                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                    if track.Animation then
-                        local animId = tostring(track.Animation.AnimationId)
-                        if animId:find("136754430023345") or animId:find("128892162720625") then
-                            isMeleeActive = true
-                            break
-                        end
-                    end
-                end
-
-                if not isMeleeActive and (tick() - lastMeleeSwitchAttempt >= 0.5) then
-                    lastMeleeSwitchAttempt = tick()
-                    pcall(function()
-                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-                        task.wait(0.02)
-                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-                    end)
-                end
-            end
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
 
             local remote = carbine:FindFirstChild("RemoteEvent")
             if remote then
@@ -319,6 +340,7 @@ local function handleWeaponAndAttack()
             end
         end
     else
+        -- 2. SABRE ROUTINE
         local sabreTool = char:FindFirstChild("Heavy Sabre") 
             or char:FindFirstChild("Sabre") 
             or char:FindFirstChild("Officer Sabre")
@@ -348,7 +370,7 @@ local function handleWeaponAndAttack()
     end
 end
 
--- ==================== WEAPON & BUFF LOOPS ====================
+-- ==================== LOOPS ====================
 
 local function applySpeedModifiers()
     local char = localPlayer.Character
@@ -379,8 +401,9 @@ local function applyFastAttack()
             local trackName = track.Name:lower()
             if animId:find("100682940298160") or animId:find("129685277572999") 
                or animId:find("90461985574355") or animId:find("126840747533828") 
-               or animId:find("120459288888895") or animId:find("109299741802024") 
-               or trackName:find("stab") or trackName:find("attack") then
+               or animId:find("120459288888895") or animId:find("109299741802024")
+               or animId:find("89579570003738") or animId:find("74204773093705")
+               or trackName:find("stab") or trackName:find("attack") or trackName:find("throw") then
                 track:Stop()
             end
         end
@@ -398,7 +421,6 @@ local function applyInfiniteLemonade()
             dummyBuff.Name = "LemonadeBuffScript"
             dummyBuff.Parent = char
         end
-
         if not char:FindFirstChild("BackpackScript") then
             local dummyBackpack = Instance.new("Folder")
             dummyBackpack.Name = "BackpackScript"
@@ -409,7 +431,6 @@ local function applyInfiniteLemonade()
     if tick() - lastLemonadeDrink >= 0.5 then
         lastLemonadeDrink = tick()
         local backpack = localPlayer:FindFirstChild("Backpack")
-        
         local lemonade = (char and char:FindFirstChild("Lemonade")) or (backpack and backpack:FindFirstChild("Lemonade"))
         if lemonade then
             local remote = lemonade:FindFirstChild("RemoteEvent")
@@ -439,6 +460,7 @@ RunService.RenderStepped:Connect(function()
     applySabreSpamAttack()
     applyRemoveSabreEffects()
     applyNoChargeLimit()
+    handleGrenadeHoming()
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -582,7 +604,6 @@ end
 
 local function farmLoop()
     handleWeaponAndAttack()
-
     VirtualUser:Button1Down(Vector2.new(0, 0))
     task.wait(0.01)
     VirtualUser:Button1Up(Vector2.new(0, 0))
@@ -695,7 +716,12 @@ local function toggleNoChargeLimit(forceState)
     if updateUIButtons then updateUIButtons() end
 end
 
--- ==================== GUI BUILDING ====================
+local function toggleGrenadeHoming(forceState)
+    state.grenadeHoming = (forceState ~= nil) and forceState or not state.grenadeHoming
+    if updateUIButtons then updateUIButtons() end
+end
+
+-- ==================== GUI BUILDING (SCROLLABLE) ====================
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "DevControlMenu"
@@ -856,10 +882,10 @@ container.BackgroundTransparency = 1
 container.Parent = mainFrame
 
 local tabs = {
-    Combat = Instance.new("Frame"),
-    Farming = Instance.new("Frame"),
-    Weapons = Instance.new("Frame"),
-    Settings = Instance.new("Frame")
+    Combat = Instance.new("ScrollingFrame"),
+    Farming = Instance.new("ScrollingFrame"),
+    Weapons = Instance.new("ScrollingFrame"),
+    Settings = Instance.new("ScrollingFrame")
 }
 
 for name, frame in pairs(tabs) do
@@ -867,6 +893,9 @@ for name, frame in pairs(tabs) do
     frame.Size = UDim2.new(1, 0, 1, 0)
     frame.BackgroundTransparency = 1
     frame.Visible = (name == "Combat")
+    frame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    frame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    frame.ScrollBarThickness = 4
     frame.Parent = container
 
     local layout = Instance.new("UIListLayout")
@@ -877,6 +906,7 @@ for name, frame in pairs(tabs) do
 
     local padding = Instance.new("UIPadding")
     padding.PaddingTop = UDim.new(0, 8)
+    padding.PaddingBottom = UDim.new(0, 8)
     padding.Parent = frame
 end
 
@@ -1000,7 +1030,8 @@ end
 local rows = {
     bring = createRow(tabs.Combat, "Bring Enemies", "bring", 1, toggleBring),
     aim = createRow(tabs.Combat, "Aimbot / Aim Assist", "aim", 2, toggleAim),
-    fakeBlock = createRow(tabs.Combat, "Fake Block", "fakeBlock", 3, toggleFakeBlock)
+    fakeBlock = createRow(tabs.Combat, "Fake Block", "fakeBlock", 3, toggleFakeBlock),
+    grenadeHoming = createRow(tabs.Combat, "Grenade Homing", "grenadeHoming", 4, toggleGrenadeHoming),
 }
 
 rows.farm = createRow(tabs.Farming, "Auto Farm Box", "farm", 1, toggleFarm)
@@ -1019,7 +1050,6 @@ createInputRow(tabs.Weapons, "Lemonade Speed:", settings.lemonadeSpeed, 9, funct
     if num then settings.lemonadeSpeed = num end
 end)
 
--- Settings Tab
 createInputRow(tabs.Settings, "Bring Distance:", settings.bringDistance, 1, function(text)
     local num = tonumber(text)
     if num then settings.bringDistance = num end
@@ -1046,6 +1076,11 @@ rows.autoBringSoloSettings = createRow(tabs.Settings, "Auto-Bring (Solo Alive)",
 createInputRow(tabs.Settings, "Auto Charge Speed:", settings.sabreBuffInterval, 4, function(text)
     local num = tonumber(text)
     if num then settings.sabreBuffInterval = num end
+end)
+
+createInputRow(tabs.Settings, "Grenade Homing Speed:", settings.grenadeSpeed, 5, function(text)
+    local num = tonumber(text)
+    if num then settings.grenadeSpeed = num end
 end)
 
 updateUIButtons = function()
@@ -1118,7 +1153,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         return
     end
 
-    -- Trigger manual charge whenever Charge key is pressed if "Remove Charge Cooldown" is active
     if state.noChargeLimit and (input.KeyCode == Enum.KeyCode.F or input.KeyCode == Enum.KeyCode.ButtonY) then
         local remote = getSabreRemote()
         if remote then
@@ -1142,6 +1176,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
             elseif kc == binds.sabreSpamAttack then toggleSabreSpamAttack()
             elseif kc == binds.removeSabreEffects then toggleRemoveSabreEffects()
             elseif kc == binds.noChargeLimit then toggleNoChargeLimit()
+            elseif kc == binds.grenadeHoming then toggleGrenadeHoming()
             end
         end
     end
