@@ -73,9 +73,6 @@ local farmStructureParts = {
 
 -- Reset remote cache automatically when character respawns
 local cachedSabreRemote = nil
-localPlayer.CharacterAdded:Connect(function()
-    cachedSabreRemote = nil
-end)
 
 -- ==================== HELPER FUNCTIONS ====================
 
@@ -483,6 +480,30 @@ local function createFarmBox(basePosition)
     return playerTargetPos
 end
 
+local function teleportToFarmBox()
+    local targetPos = createFarmBox(settings.farmPosition)
+    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart", 5)
+    if hrp then
+        hrp.CFrame = CFrame.new(targetPos)
+    end
+end
+
+local function handleAliveTeamTeleport()
+    if localPlayer.Team and string.lower(localPlayer.Team.Name) == "alive" then
+        task.wait(0.2)
+        teleportToFarmBox()
+    end
+end
+
+-- Re-teleport whenever player joins "Alive" team or respawns while on it
+localPlayer:GetPropertyChangedSignal("Team"):Connect(handleAliveTeamTeleport)
+
+localPlayer.CharacterAdded:Connect(function()
+    cachedSabreRemote = nil
+    handleAliveTeamTeleport()
+end)
+
 local function removeFarmBox()
     if farmBoxModel then
         farmBoxModel:Destroy()
@@ -589,10 +610,7 @@ local function toggleFarm(forceState)
     if connections.farmLoop then connections.farmLoop:Disconnect() connections.farmLoop = nil end
 
     if state.farm then
-        local targetPos = createFarmBox(settings.farmPosition)
-        local char = localPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then hrp.CFrame = CFrame.new(targetPos) end
+        teleportToFarmBox()
         toggleBring(true)
         connections.farmLoop = RunService.RenderStepped:Connect(farmLoop)
     else
@@ -1014,10 +1032,7 @@ createInputRow(tabs.Settings, "Farm Pos (X,Y,Z):", "0, -400, 0", 2, function(tex
     if #coords >= 3 then
         settings.farmPosition = Vector3.new(coords[1], coords[2], coords[3])
         if state.farm then
-            local targetPos = createFarmBox(settings.farmPosition)
-            local char = localPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame = CFrame.new(targetPos) end
+            teleportToFarmBox()
         end
     end
 end)
