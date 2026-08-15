@@ -71,11 +71,30 @@ local farmStructureParts = {
     { name = "Part",       position = Vector3.new(-14, 22, 31), size = Vector3.new(42, 42, 6), canCollide = true  },
 }
 
--- Reset remote cache automatically when character respawns
+-- Forward declaration for farm box creation function
+local createFarmBox
+
+-- Function to handle auto-teleporting when joining the "Alive" team while farming
+local function checkAliveTeamFarmTeleport()
+    if state.farm and localPlayer.Team and string.lower(localPlayer.Team.Name) == "alive" then
+        task.wait(0.1)
+        local char = localPlayer.Character
+        local hrp = char and (char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 3))
+        if hrp and createFarmBox then
+            local targetPos = createFarmBox(settings.farmPosition)
+            hrp.CFrame = CFrame.new(targetPos)
+        end
+    end
+end
+
+-- Reset remote cache automatically when character respawns & check Alive team teleport
 local cachedSabreRemote = nil
 localPlayer.CharacterAdded:Connect(function()
     cachedSabreRemote = nil
+    checkAliveTeamFarmTeleport()
 end)
+
+localPlayer:GetPropertyChangedSignal("Team"):Connect(checkAliveTeamFarmTeleport)
 
 -- ==================== HELPER FUNCTIONS ====================
 
@@ -456,7 +475,7 @@ UserInputService.InputBegan:Connect(handleNoAimShooting)
 
 -- ==================== BOX CREATOR & CORE FUNCTIONS ====================
 
-local function createFarmBox(basePosition)
+createFarmBox = function(basePosition)
     if farmBoxModel then farmBoxModel:Destroy() end
 
     farmBoxModel = Instance.new("Model")
